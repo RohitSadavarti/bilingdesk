@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'dart:io';
+
+// Add your SignatureCaptureScreen and SignatureManager imports here
 
 void main() {
   runApp(MyApp());
@@ -64,10 +67,15 @@ class _BillingAppState extends State<BillingApp> {
   double advanceAmount = 0.0;
   double balanceAmount = 0.0;
 
+  // Signature management
+  String? _signaturePath;
+
   @override
   void initState() {
     super.initState();
     _dateController.text = DateTime.now().toString().split(' ')[0];
+    // Clean up old signatures when app starts
+    SignatureManager.cleanupOldSignatures();
   }
 
   void _addNewItem() {
@@ -103,6 +111,45 @@ class _BillingAppState extends State<BillingApp> {
       advanceAmount = advance;
       balanceAmount = total - advance;
     });
+  }
+
+  // Signature capture functionality
+  Future<void> _captureSignature() async {
+    final String? signaturePath = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => SignatureCaptureScreen(),
+      ),
+    );
+    
+    if (signaturePath != null) {
+      setState(() {
+        _signaturePath = signaturePath;
+      });
+      
+      // Show file size info
+      final double fileSize = await SignatureManager.getSignatureFileSize(signaturePath);
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Signature captured successfully (${fileSize.toStringAsFixed(1)} KB)'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  void _removeSignature() {
+    setState(() {
+      _signaturePath = null;
+    });
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Signature removed'),
+        backgroundColor: Colors.orange,
+      ),
+    );
   }
 
   String _numberToWords(double number) {
@@ -179,10 +226,120 @@ class _BillingAppState extends State<BillingApp> {
             advanceAmount: advanceAmount,
             balanceAmount: balanceAmount,
             numberToWords: _numberToWords(balanceAmount),
+            signaturePath: _signaturePath,
           ),
         ),
       );
     }
+  }
+
+  Widget _buildSignatureSection() {
+    return Card(
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Signature', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            SizedBox(height: 16),
+            Container(
+              height: 150,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey),
+                borderRadius: BorderRadius.circular(8),
+                color: _signaturePath == null ? Colors.grey[50] : Colors.white,
+              ),
+              child: _signaturePath != null && SignatureManager.validateSignatureFile(_signaturePath)
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.file(
+                        File(_signaturePath!),
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.error, size: 48, color: Colors.red),
+                                SizedBox(height: 8),
+                                Text('Error loading signature', 
+                                  style: TextStyle(color: Colors.red)),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    )
+                  : Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.draw, size: 48, color: Colors.grey),
+                          SizedBox(height: 8),
+                          Text(
+                            'No signature captured',
+                            style: TextStyle(color: Colors.grey[600]),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            'Tap "Capture Signature" to add',
+                            style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+            ),
+            SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (_signaturePath != null) ...[
+                  ElevatedButton.icon(
+                    onPressed: _removeSignature,
+                    icon: Icon(Icons.delete),
+                    label: Text('Remove'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                  SizedBox(width: 16),
+                ],
+                ElevatedButton.icon(
+                  onPressed: _captureSignature,
+                  icon: Icon(Icons.draw),
+                  label: Text(_signaturePath != null ? 'Update Signature' : 'Capture Signature'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  ),
+                ),
+              ],
+            ),
+            // Show signature info if available
+            if (_signaturePath != null)
+              FutureBuilder<double>(
+                future: SignatureManager.getSignatureFileSize(_signaturePath!),
+                builder: (context, snapshot) {
+                  if (snapshot.hasData) {
+                    return Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text(
+                        'File size: ${snapshot.data!.toStringAsFixed(1)} KB',
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        textAlign: TextAlign.center,
+                      ),
+                    );
+                  }
+                  return SizedBox.shrink();
+                },
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildDataEntryForm() {
@@ -481,6 +638,11 @@ class _BillingAppState extends State<BillingApp> {
               ),
             ),
             
+            SizedBox(height: 20),
+            
+            // Signature Section
+            _buildSignatureSection(),
+            
             SizedBox(height: 30),
             
             // Action Buttons
@@ -519,464 +681,5 @@ class _BillingAppState extends State<BillingApp> {
     _invoiceNoController.dispose();
     _dateController.dispose();
     super.dispose();
-  }
-}
-
-class InvoicePreviewScreen extends StatelessWidget {
-  final String customerName;
-  final String customerAddress;
-  final String invoiceNo;
-  final String date;
-  final List<InvoiceItem> items;
-  final double totalAmount;
-  final double advanceAmount;
-  final double balanceAmount;
-  final String numberToWords;
-
-  const InvoicePreviewScreen({
-    Key? key,
-    required this.customerName,
-    required this.customerAddress,
-    required this.invoiceNo,
-    required this.date,
-    required this.items,
-    required this.totalAmount,
-    required this.advanceAmount,
-    required this.balanceAmount,
-    required this.numberToWords,
-  }) : super(key: key);
-
-  Widget _buildHeader() {
-    return Column(
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Container(
-              padding: EdgeInsets.all(8),
-              decoration: BoxDecoration(border: Border.all()),
-              child: Text('ॐ', style: TextStyle(fontSize: 20)),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text('📞 8355836030', style: TextStyle(fontSize: 12)),
-                Text('7666717724', style: TextStyle(fontSize: 12)),
-              ],
-            ),
-          ],
-        ),
-        SizedBox(height: 10),
-        Text(
-          "DNYANESHWAR TRANSPORT SERVICES",
-          style: TextStyle(
-            fontSize: 30, 
-            fontWeight: FontWeight.bold, 
-            color: Colors.orange,
-            fontFamily: 'Times New Roman'
-          ),
-          textAlign: TextAlign.center,
-        ),
-        SizedBox(height: 5),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text("📧 dnyaneshwartransport@gmail.com", 
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-            Text("📌 Kamothe, Navi Mumbai - 410 209", 
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCustomerDetails() {
-    return Container(
-      decoration: BoxDecoration(border: Border.all(color: Colors.black)),
-      padding: EdgeInsets.all(8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text("M/s.: $customerName", style: TextStyle(fontSize: 12)),
-                SizedBox(height: 5),
-                Text("Add.: $customerAddress", style: TextStyle(fontSize: 12)),
-              ],
-            ),
-          ),
-          Container(width: 1, height: 45, color: Colors.black, margin: EdgeInsets.symmetric(horizontal: 8)),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text("Invoice No.: $invoiceNo", style: TextStyle(fontSize: 12)),
-                SizedBox(height: 5),
-                Text("Date: $date", style: TextStyle(fontSize: 12)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _tableHeaderCell(String text) {
-    return Container(
-      padding: EdgeInsets.all(4),
-      alignment: Alignment.center,
-      child: Text(
-        text,
-        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-        textAlign: TextAlign.center,
-      ),
-    );
-  }
-
-  Widget _buildFooterRow(String leftText, String rightLabel, double amount) {
-    return Container(
-      height: 30,
-      child: Row(
-        children: [
-          Expanded(
-            flex: 6,
-            child: Container(
-              padding: EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                border: Border(right: BorderSide(color: Colors.black, width: 1)),
-              ),
-              child: Text(leftText, style: TextStyle(fontSize: 12)),
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Container(
-              padding: EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                border: Border(right: BorderSide(color: Colors.black, width: 1)),
-              ),
-              child: Text(
-                rightLabel,
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Container(
-              padding: EdgeInsets.all(4),
-              child: Text(
-                "₹${amount.toStringAsFixed(2)}",
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                textAlign: TextAlign.right,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _generateAndPrintPDF(BuildContext context) async {
-    final pdf = pw.Document();
-
-    pdf.addPage(
-      pw.Page(
-        pageFormat: PdfPageFormat.a4,
-        margin: pw.EdgeInsets.all(20),
-        build: (pw.Context context) {
-          return pw.Column(
-            children: [
-              // Header
-              pw.Container(
-                padding: pw.EdgeInsets.all(15),
-                decoration: pw.BoxDecoration(border: pw.Border.all(width: 2)),
-                child: pw.Column(
-                  children: [
-                    pw.Row(
-                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                      children: [
-                        pw.Container(
-                          padding: pw.EdgeInsets.all(8),
-                          decoration: pw.BoxDecoration(border: pw.Border.all()),
-                          child: pw.Text('ॐ', style: pw.TextStyle(fontSize: 20)),
-                        ),
-                        pw.Column(
-                          crossAxisAlignment: pw.CrossAxisAlignment.end,
-                          children: [
-                            pw.Text('📞 8355836030', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                            pw.Text('7666717724', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                          ],
-                        ),
-                      ],
-                    ),
-                    pw.SizedBox(height: 15),
-                    pw.Text(
-                      'DNYANESHWAR TRANSPORT SERVICES',
-                      style: pw.TextStyle(fontSize: 26, fontWeight: pw.FontWeight.bold),
-                      textAlign: pw.TextAlign.center,
-                    ),
-                    pw.SizedBox(height: 15),
-                    pw.Row(
-                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                      children: [
-                        pw.Text('✉ dnyaneshwartransport@gmail.com'),
-                        pw.Text('📍 Kamothe, Navi Mumbai - 410 209'),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              
-              // Invoice Title
-              pw.Container(
-                width: double.infinity,
-                padding: pw.EdgeInsets.symmetric(vertical: 12),
-                decoration: pw.BoxDecoration(border: pw.Border.all(width: 2)),
-                child: pw.Text(
-                  'INVOICE',
-                  style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
-                  textAlign: pw.TextAlign.center,
-                ),
-              ),
-              
-              // Customer Details and rest of PDF content...
-              // (PDF generation code continues here)
-            ],
-          );
-        },
-      ),
-    );
-
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat format) async => pdf.save(),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    int blankRows = items.isEmpty ? 8 : (items.length < 8 ? 8 : items.length);
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text("Invoice Preview"),
-        backgroundColor: Colors.orange,
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            icon: Icon(Icons.print),
-            onPressed: () => _generateAndPrintPDF(context),
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildHeader(),
-              SizedBox(height: 10),
-              Container(
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.black, width: 1),
-                ),
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: Center(
-                  child: Text(
-                    "INVOICE",
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ),
-              _buildCustomerDetails(),
-              SizedBox(height: 10),
-              
-              // ===== TABLE WITHOUT HORIZONTAL LINES =====
-              Container(
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.black, width: 1),
-                ),
-                child: Table(
-                  border: TableBorder(
-                    top: BorderSide(color: Colors.black, width: 1),
-                    bottom: BorderSide(color: Colors.black, width: 1),
-                    left: BorderSide(color: Colors.black, width: 1),
-                    right: BorderSide(color: Colors.black, width: 1),
-                    verticalInside: BorderSide(color: Colors.black, width: 1),
-                    horizontalInside: BorderSide.none, // NO HORIZONTAL LINES
-                  ),
-                  columnWidths: const {
-                    0: FixedColumnWidth(40),
-                    1: FixedColumnWidth(80),
-                    2: FixedColumnWidth(100),
-                    3: FlexColumnWidth(),
-                    4: FixedColumnWidth(60),
-                    5: FixedColumnWidth(50),
-                    6: FixedColumnWidth(50),
-                    7: FixedColumnWidth(80),
-                  },
-                  children: [
-                    TableRow(
-                      decoration: BoxDecoration(color: Colors.grey[300]),
-                      children: [
-                        _tableHeaderCell("Trip No."),
-                        _tableHeaderCell("Date"),
-                        _tableHeaderCell("Vehicle No."),
-                        _tableHeaderCell("Particulars"),
-                        _tableHeaderCell("Weight"),
-                        _tableHeaderCell("Type"),
-                        _tableHeaderCell("Adv."),
-                        _tableHeaderCell("Amount"),
-                      ],
-                    ),
-                    // Dynamic rows from items list
-                    for (int i = 0; i < items.length; i++)
-                      TableRow(
-                        children: [
-                          Container(height: 35, padding: EdgeInsets.all(4), child: Text("${i + 1}", textAlign: TextAlign.center)),
-                          Container(height: 35, padding: EdgeInsets.all(4), child: Text(items[i].date, textAlign: TextAlign.center)),
-                          Container(height: 35, padding: EdgeInsets.all(4), child: Text(items[i].vehicleNo, textAlign: TextAlign.center)),
-                          Container(height: 35, padding: EdgeInsets.all(4), child: Text(items[i].particulars, textAlign: TextAlign.left)),
-                          Container(height: 35, padding: EdgeInsets.all(4), child: Text(items[i].weight, textAlign: TextAlign.center)),
-                          Container(height: 35, padding: EdgeInsets.all(4), child: Text(items[i].type, textAlign: TextAlign.center)),
-                          Container(height: 35, padding: EdgeInsets.all(4), child: Text(items[i].advance, textAlign: TextAlign.center)),
-                          Container(height: 35, padding: EdgeInsets.all(4), child: Text(items[i].amount, textAlign: TextAlign.center)),
-                        ],
-                      ),
-                    // Blank rows for handwriting
-                    for (int i = items.length; i < blankRows; i++)
-                      TableRow(
-                        children: List.generate(8, (col) => Container(height: 35)),
-                      ),
-                  ],
-                ),
-              ),
-              
-              SizedBox(height: 5),
-              
-              // ===== FOOTER SECTION =====
-              Container(
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.black, width: 1),
-                ),
-                child: Column(
-                  children: [
-                    _buildFooterRow("TAX INVOICE - GST IS PAYABLE BY CONSIGNOR", "TOTAL", totalAmount),
-                    Container(height: 1, color: Colors.black), // Separator line
-                    _buildFooterRow("TAX INVOICE - GST IS PAYABLE BY TRANSPORTER", "ADVANCE", advanceAmount),
-                    Container(height: 1, color: Colors.black), // Separator line
-                    _buildFooterRow("RUPEES IN WORDS: ${numberToWords.toUpperCase()}", "BALANCE", balanceAmount),
-                    Container(height: 1, color: Colors.black), // Separator line
-                    Container(
-                      height: 30,
-                      child: Row(
-                        children: [
-                          Expanded(
-                            flex: 6,
-                            child: Container(
-                              padding: EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                border: Border(right: BorderSide(color: Colors.black, width: 1)),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text("PAN No. AWZPN4133A PROPRIETOR", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                                  Text("SHUBHAM NANDKUMAR NATE", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                                ],
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            flex: 2,
-                            child: Container(
-                              padding: EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                border: Border(right: BorderSide(color: Colors.black, width: 1)),
-                              ),
-                              child: Text(
-                                "G-TOTAL",
-                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            flex: 2,
-                            child: Container(
-                              padding: EdgeInsets.all(4),
-                              child: Text(
-                                "₹${totalAmount.toStringAsFixed(2)}",
-                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                                textAlign: TextAlign.right,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              
-              SizedBox(height: 10),
-              
-              // ===== BANK & SIGNATURE =====
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    "FOR DNYANESHWAR TRANSPORT SERVICE",
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    "BANK NAME: STATE BANK OF INDIA A/C. NO.: 20206528530",
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                  ),
-                  Text(
-                    "BRANCH : KHANDESHWAR IFSC CODE: SBIN0016374",
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                  ),
-                  SizedBox(height: 20),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Column(
-                      children: [
-                        Container(
-                          width: 100,
-                          height: 60,
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey, width: 1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Center(
-                            child: Text(
-                              "🖋️\nSignature\nStamp",
-                              textAlign: TextAlign.center,
-                              style: TextStyle(fontSize: 10, color: Colors.grey[600]),
-                            ),
-                          ),
-                        ),
-                        SizedBox(height: 5),
-                        Text(
-                          "Authorised Signatory",
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }
